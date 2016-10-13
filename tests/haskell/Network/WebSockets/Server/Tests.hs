@@ -1,9 +1,7 @@
 --------------------------------------------------------------------------------
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Network.WebSockets.Server.Tests
-    ( tests
-    ) where
+module Network.WebSockets.Server.Tests where
 
 
 --------------------------------------------------------------------------------
@@ -20,7 +18,7 @@ import qualified Data.ByteString.Lazy           as BL
 import           Data.Text                      (Text)
 import           Test.Framework                 (Test, testGroup)
 import           Test.Framework.Providers.HUnit (testCase)
-import           Test.HUnit                     (Assertion, assert, (@=?))
+import           Test.HUnit                     (Assertion, assert, assertFailure, (@=?))
 import           Test.QuickCheck                (Arbitrary, arbitrary)
 import           Test.QuickCheck.Gen            (Gen (..))
 import           Test.QuickCheck.Random         (newQCGen)
@@ -53,8 +51,10 @@ testBulkServerClient = testServerClient sendTextDatas
 testServerClient :: (Connection -> [BL.ByteString] -> IO ()) -> Assertion
 testServerClient sendMessages = withEchoServer 42940 "Bye" $ do
     texts  <- map unArbitraryUtf8 <$> sample
-    texts' <- retry $ runClient "127.0.0.1" 42940 "/chat" $ client texts
-    texts @=? texts'
+    texts' <- runClient "127.0.0.1" 42940 "/chat" $ client texts
+    case texts' of
+        Left e -> assertFailure (show e)
+        Right texts'' -> texts @=? texts''
   where
     client :: [BL.ByteString] -> ClientApp [BL.ByteString]
     client texts conn = do
@@ -64,7 +64,6 @@ testServerClient sendMessages = withEchoServer 42940 "Bye" $ do
         expectCloseException conn "Bye"
         return texts'
 
-
 --------------------------------------------------------------------------------
 testOnPong :: Assertion
 testOnPong = withEchoServer 42941 "Bye" $ do
@@ -73,8 +72,10 @@ testOnPong = withEchoServer 42941 "Bye" $ do
                    { connectionOnPong = writeIORef gotPong True
                    }
 
-    rcv <- runClientWith "127.0.0.1" 42941 "/" opts [] client
-    assert rcv
+    rcv' <- runClientWith "127.0.0.1" 42941 "/" opts [] client
+    case rcv' of
+        Left e -> assertFailure (show e)
+        Right rcv -> assert rcv
     assert =<< readIORef gotPong
   where
     client :: ClientApp Bool
@@ -116,7 +117,7 @@ retry action = (\(_ :: SomeException) -> waitSome >> action) `handle` action
 withEchoServer :: Int -> BL.ByteString -> IO a -> IO a
 withEchoServer port expectedClose action = do
     cRef <- newIORef False
-    serverThread <- forkIO $ retry $ runServer "0.0.0.0" port (\c -> server c `catch` handleClose cRef)
+    serverThread <- forkIO $ runServer "0.0.0.0" port (\c -> server c `catch` handleClose cRef)
     waitSome
     result <- action
     waitSome
@@ -141,7 +142,6 @@ withEchoServer port expectedClose action = do
         error "Unexpected connection closed exception"
     handleClose _ (ParseException _) =
         error "Unexpected parse exception"
-
 
 --------------------------------------------------------------------------------
 expectCloseException :: Connection -> BL.ByteString -> IO ()

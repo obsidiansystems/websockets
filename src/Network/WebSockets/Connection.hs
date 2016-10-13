@@ -2,6 +2,8 @@
 -- | This module exposes connection internals and should only be used if you
 -- really know what you are doing.
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes        #-}
+
 module Network.WebSockets.Connection
     ( PendingConnection (..)
     , AcceptRequest(..)
@@ -31,13 +33,14 @@ module Network.WebSockets.Connection
     , forkPingThread
     ) where
 
-
 --------------------------------------------------------------------------------
 import qualified Blaze.ByteString.Builder    as Builder
+import           Blaze.ByteString.Builder    (Builder)
 import           Control.Concurrent          (forkIO, threadDelay)
 import           Control.Exception           (AsyncException, fromException,
                                               handle, throwIO)
 import           Control.Monad               (unless, when)
+import           Data.Attoparsec             (Parser)
 import qualified Data.ByteString             as B
 import           Data.IORef                  (IORef, newIORef, readIORef,
                                               writeIORef)
@@ -45,14 +48,10 @@ import           Data.List                   (find)
 import qualified Data.Text                   as T
 import           Data.Word                   (Word16)
 
-
 --------------------------------------------------------------------------------
 import           Network.WebSockets.Http
 import           Network.WebSockets.Protocol
-import           Network.WebSockets.Stream   (Stream)
-import qualified Network.WebSockets.Stream   as Stream
 import           Network.WebSockets.Types
-
 
 --------------------------------------------------------------------------------
 -- | A new client connected to the server. We haven't accepted the connection
@@ -65,10 +64,11 @@ data PendingConnection = PendingConnection
     , pendingOnAccept :: !(Connection -> IO ())
     -- ^ One-shot callback fired when a connection is accepted, i.e., *after*
     -- the accepting response is sent to the client.
-    , pendingStream   :: !Stream
+    , pendingStreamParse   :: forall a. Parser a -> IO (Maybe a)
+    , pendingStreamWrite   :: Builder -> IO ()
+    , pendingStreamClose   :: IO ()
     -- ^ Input/output stream
     }
-
 
 --------------------------------------------------------------------------------
 data AcceptRequest = AcceptRequest
@@ -80,18 +80,14 @@ data AcceptRequest = AcceptRequest
     -- ^ Extra headers to send with the response.
     }
 
-
 --------------------------------------------------------------------------------
 -- | Utility
 sendResponse :: PendingConnection -> Response -> IO ()
-sendResponse pc rsp = Stream.write (pendingStream pc)
-    (Builder.toLazyByteString (encodeResponse rsp))
-
+sendResponse pc rsp = pendingStreamWrite pc (encodeResponse rsp)
 
 --------------------------------------------------------------------------------
 acceptRequest :: PendingConnection -> IO Connection
 acceptRequest pc = acceptRequestWith pc $ AcceptRequest Nothing []
-
 
 --------------------------------------------------------------------------------
 acceptRequestWith :: PendingConnection -> AcceptRequest -> IO Connection
@@ -104,8 +100,8 @@ acceptRequestWith pc ar = case find (flip compatible request) protocols of
             headers = subproto ++ acceptHeaders ar
             response = finishRequest protocol request headers
         sendResponse pc response
-        parse <- decodeMessages protocol (pendingStream pc)
-        write <- encodeMessages protocol ServerConnection (pendingStream pc)
+        parse <- decodeMessages protocol (pendingStreamParse pc)
+        write <- encodeMessages protocol ServerConnection (pendingStreamWrite pc)
 
         sentRef    <- newIORef False
         let connection = Connection
@@ -124,11 +120,9 @@ acceptRequestWith pc ar = case find (flip compatible request) protocols of
     versionHeader = [("Sec-WebSocket-Version",
         B.intercalate ", " $ concatMap headerVersions protocols)]
 
-
 --------------------------------------------------------------------------------
 rejectRequest :: PendingConnection -> B.ByteString -> IO ()
 rejectRequest pc message = sendResponse pc $ response400 [] message
-
 
 --------------------------------------------------------------------------------
 data Connection = Connection
@@ -145,7 +139,6 @@ data Connection = Connection
     -- if we have sent a close message and are waiting for the peer to respond.
     }
 
-
 --------------------------------------------------------------------------------
 -- | Set options for a 'Connection'.
 data ConnectionOptions = ConnectionOptions
@@ -154,13 +147,11 @@ data ConnectionOptions = ConnectionOptions
       -- used to tickle connections or fire missiles.
     }
 
-
 --------------------------------------------------------------------------------
 defaultConnectionOptions :: ConnectionOptions
 defaultConnectionOptions = ConnectionOptions
     { connectionOnPong = return ()
     }
-
 
 --------------------------------------------------------------------------------
 receive :: Connection -> IO Message
@@ -169,7 +160,6 @@ receive conn = do
     case mbMsg of
         Nothing  -> throwIO ConnectionClosed
         Just msg -> return msg
-
 
 --------------------------------------------------------------------------------
 -- | Receive an application message. Automatically respond to control messages.
@@ -198,7 +188,6 @@ receiveDataMessage conn = do
             Ping pl   -> do
                 send conn (ControlMessage (Pong pl))
                 receiveDataMessage conn
-
 
 --------------------------------------------------------------------------------
 -- | Receive a message, converting it to whatever format is needed.
@@ -264,7 +253,6 @@ sendBinaryDatas conn = sendDataMessages conn . map (Binary . toLazyByteString)
 sendClose :: WebSocketsData a => Connection -> a -> IO ()
 sendClose conn = sendCloseCode conn 1000
 
-
 --------------------------------------------------------------------------------
 -- | Send a friendly close message and close code.  Similar to 'sendClose',
 -- you should continue calling 'receiveDataMessage' until you receive a
@@ -276,12 +264,10 @@ sendCloseCode :: WebSocketsData a => Connection -> Word16 -> a -> IO ()
 sendCloseCode conn code =
     send conn . ControlMessage . Close code . toLazyByteString
 
-
 --------------------------------------------------------------------------------
 -- | Send a ping
 sendPing :: WebSocketsData a => Connection -> a -> IO ()
 sendPing conn = send conn . ControlMessage . Ping . toLazyByteString
-
 
 --------------------------------------------------------------------------------
 -- | Forks a ping thread, sending a ping message every @n@ seconds over the

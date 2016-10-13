@@ -1,4 +1,4 @@
-resolver: lts-6.8
+resolver: nightly-2016-10-11 
 flags:
   websockets:
     example: false

@@ -1,9 +1,7 @@
 --------------------------------------------------------------------------------
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-module Network.WebSockets.Tests
-    ( tests
-    ) where
+module Network.WebSockets.Tests where
 
 
 --------------------------------------------------------------------------------
@@ -29,14 +27,13 @@ import           Network.WebSockets
 import qualified Network.WebSockets.Hybi13             as Hybi13
 import           Network.WebSockets.Hybi13.Demultiplex
 import           Network.WebSockets.Protocol
-import qualified Network.WebSockets.Stream             as Stream
 import           Network.WebSockets.Tests.Util
 import           Network.WebSockets.Types
 
 
 --------------------------------------------------------------------------------
 tests :: Test
-tests = testGroup "Network.WebSockets.Test"
+tests = testGroup "Network.WebSockets.Tests"
     [ testProperty "simple encode/decode Hybi13" (testSimpleEncodeDecode Hybi13)
     , testProperty "fragmented Hybi13"           testFragmentedHybi13
     ]
@@ -46,12 +43,12 @@ tests = testGroup "Network.WebSockets.Test"
 testSimpleEncodeDecode :: Protocol -> Property
 testSimpleEncodeDecode protocol = QC.monadicIO $
     QC.forAllM QC.arbitrary $ \msgs -> QC.run $ do
-        echo  <- Stream.makeEchoStream
-        parse <- decodeMessages protocol echo
-        write <- encodeMessages protocol ClientConnection echo
+      withEchoStream $ \parseStream writeStream closeStream -> do
+        parse <- decodeMessages protocol parseStream
+        write <- encodeMessages protocol ClientConnection writeStream
         _     <- forkIO $ write msgs
         msgs' <- catMaybes <$> replicateM (length msgs) parse
-        Stream.close echo
+        closeStream
         msgs @=? msgs'
 
 
@@ -59,18 +56,19 @@ testSimpleEncodeDecode protocol = QC.monadicIO $
 testFragmentedHybi13 :: Property
 testFragmentedHybi13 = QC.monadicIO $
     QC.forAllM QC.arbitrary $ \fragmented -> QC.run $ do
-        echo     <- Stream.makeEchoStream
-        parse    <- Hybi13.decodeMessages echo
-        -- is'      <- Streams.filter isDataMessage =<< Hybi13.decodeMessages is
-
-        -- Simple hacky encoding of all frames
+      withEchoStream $ \parseStream writeStream closeStream -> do
         _ <- forkIO $ do
-            mapM_ (Stream.write echo)
-                [ Builder.toLazyByteString (Hybi13.encodeFrame Nothing f)
+            mapM_ writeStream
+                [ Hybi13.encodeFrame Nothing f
                 | FragmentedMessage _ frames <- fragmented
                 , f                          <- frames
                 ]
-            Stream.close echo
+            closeStream
+        parse    <- Hybi13.decodeMessages parseStream
+        -- is'      <- Streams.filter isDataMessage =<< Hybi13.decodeMessages is
+
+        -- Simple hacky encoding of all frames
+
 
         -- Check if we got all data
         msgs <- filter isDataMessage <$> parseAll parse
@@ -163,7 +161,6 @@ instance Arbitrary FragmentedMessage where
             , Frame True True  True  True  PongFrame "Derp"
             ]
 
-
 --------------------------------------------------------------------------------
 arbitraryFragmentation :: BL.ByteString -> Gen [BL.ByteString]
 arbitraryFragmentation bs = arbitraryFragmentation' bs
@@ -178,7 +175,6 @@ arbitraryFragmentation bs = arbitraryFragmentation' bs
         case r of
             "" -> return [l]
             _  -> (l :) <$> arbitraryFragmentation' r
-
 
 --------------------------------------------------------------------------------
 arbitraryInterleave :: Gen a -> [a] -> Gen [a]

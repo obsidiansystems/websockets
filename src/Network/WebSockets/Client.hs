@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 --------------------------------------------------------------------------------
 -- | This part of the library provides you with utilities to create WebSockets
 -- clients (in addition to servers).
@@ -11,20 +13,27 @@ module Network.WebSockets.Client
 
 
 --------------------------------------------------------------------------------
-import qualified Blaze.ByteString.Builder      as Builder
-import           Control.Exception             (bracket, finally, throwIO)
-import           Data.IORef                    (newIORef)
-import qualified Data.Text                     as T
-import qualified Data.Text.Encoding            as T
-import qualified Network.Socket                as S
+import qualified Blaze.ByteString.Builder as Builder
+import Blaze.ByteString.Builder (Builder)
+import Control.Exception (finally, throwIO)
+import Data.IORef (newIORef)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
+import qualified Network.Socket as S
+import qualified Data.Attoparsec.ByteString as A
 
+import qualified Pipes as P
+import Pipes ((>->))
+import qualified Pipes.ByteString as P
+import qualified Pipes.Parse as P
+import qualified Pipes.Attoparsec as P
+import qualified Pipes.Network.TCP as P
+import Control.Concurrent.MVar
 
 --------------------------------------------------------------------------------
 import           Network.WebSockets.Connection
 import           Network.WebSockets.Http
 import           Network.WebSockets.Protocol
-import           Network.WebSockets.Stream     (Stream)
-import qualified Network.WebSockets.Stream     as Stream
 import           Network.WebSockets.Types
 
 
@@ -40,7 +49,7 @@ runClient :: String       -- ^ Host
           -> Int          -- ^ Port
           -> String       -- ^ Path
           -> ClientApp a  -- ^ Client application
-          -> IO a
+          -> IO (Either HandshakeException a)
 runClient host port path ws =
     runClientWith host port path defaultConnectionOptions [] ws
 
@@ -52,7 +61,7 @@ runClientWith :: String             -- ^ Host
               -> ConnectionOptions  -- ^ Options
               -> Headers            -- ^ Custom headers to send
               -> ClientApp a        -- ^ Client application
-              -> IO a
+              -> IO (Either HandshakeException a)
 runClientWith host port path opts customHeaders app = do
     -- Create and connect socket
     let hints = S.defaultHints
@@ -66,51 +75,46 @@ runClientWith host port path opts customHeaders app = do
     res <- finally
         (S.connect sock (S.addrAddress $ head addrInfos) >>
          runClientWithSocket sock fullHost path opts customHeaders app)
-        (S.sClose sock)
+        (S.close sock)
 
     -- Clean up
     return res
 
 
 --------------------------------------------------------------------------------
-runClientWithStream
-    :: Stream
-    -- ^ Stream
-    -> String
-    -- ^ Host
-    -> String
-    -- ^ Path
-    -> ConnectionOptions
-    -- ^ Connection options
-    -> Headers
-    -- ^ Custom headers to send
-    -> ClientApp a
-    -- ^ Client application
-    -> IO a
-runClientWithStream stream host path opts customHeaders app = do
+runClientWithStream :: (forall x. A.Parser x -> IO (Maybe x)) -- ^ Stream parse
+                    -> (Builder -> IO ()) -- ^ Stream write
+                    -> String -- ^ Host
+                    -> String -- ^ Path
+                    -> ConnectionOptions -- ^ Connection options
+                    -> Headers -- ^ Custom headers to send
+                    -> ClientApp a -- ^ Client application
+                    -> IO (Either HandshakeException a)
+runClientWithStream streamParse streamWrite host path opts customHeaders app = do
     -- Create the request and send it
     request    <- createRequest protocol bHost bPath False customHeaders
-    Stream.write stream (Builder.toLazyByteString $ encodeRequestHead request)
-    mbResponse <- Stream.parse stream decodeResponseHead
-    response   <- case mbResponse of
-        Just response -> return response
-        Nothing       -> throwIO $ OtherHandshakeException $
-            "Network.WebSockets.Client.runClientWithStream: no handshake " ++
-            "response from server"
-    -- Note that we pattern match to evaluate the result here
-    Response _ _ <- return $ finishResponse protocol request response
-    parse        <- decodeMessages protocol stream
-    write        <- encodeMessages protocol ClientConnection stream
-    sentRef      <- newIORef False
-
-    app Connection
-        { connectionOptions   = opts
-        , connectionType      = ClientConnection
-        , connectionProtocol  = protocol
-        , connectionParse     = parse
-        , connectionWrite     = write
-        , connectionSentClose = sentRef
-        }
+    streamWrite (encodeRequestHead request)
+    mbResponse <- streamParse decodeResponseHead
+    case mbResponse of
+        Nothing -> return . Left . OtherHandshakeException $
+            "Network.WebSockets.Client.runClientWithStream: no handshake response from server"
+        Just response -> do
+          -- Note that we pattern match to evaluate the result here
+          case finishResponse protocol request response of
+            Left e -> return (Left e)
+            Right (Response _ _) -> do
+              parse        <- decodeMessages protocol streamParse
+              write        <- encodeMessages protocol ClientConnection streamWrite
+              sentRef      <- newIORef False
+              res <- app Connection
+                           { connectionOptions   = opts
+                           , connectionType      = ClientConnection
+                           , connectionProtocol  = protocol
+                           , connectionParse     = parse
+                           , connectionWrite     = write
+                           , connectionSentClose = sentRef
+                           }
+              return (Right res)
   where
     protocol = defaultProtocol  -- TODO
     bHost    = T.encodeUtf8 $ T.pack host
@@ -124,9 +128,22 @@ runClientWithSocket :: S.Socket           -- ^ Socket
                     -> ConnectionOptions  -- ^ Options
                     -> Headers            -- ^ Custom headers to send
                     -> ClientApp a        -- ^ Client application
-                    -> IO a
-runClientWithSocket sock host path opts customHeaders app = bracket
-    (Stream.makeSocketStream sock)
-    Stream.close
-    (\stream ->
-        runClientWithStream stream host path opts customHeaders app)
+                    -> IO (Either HandshakeException a)
+runClientWithSocket socket host path opts customHeaders app = do
+  let producer = P.fromSocket socket 4096
+  prodRef <- newMVar producer
+  let consumer = P.toSocket socket
+      parseStream p = do 
+        res <- modifyMVar prodRef $ \pr -> do
+           (res,pr') <- P.runStateT (P.parse p) pr
+           return (pr',res)
+        case res of
+           Nothing -> return Nothing
+           Just (Left e) -> throwIO e
+           Just (Right x) -> return (Just x)
+      writeStream b = P.runEffect (P.fromLazy (Builder.toLazyByteString b) >-> consumer)
+      closeStream = do
+        modifyMVar_ prodRef (\_ -> return (return ()))
+        S.close socket
+  runClientWithStream parseStream writeStream host path opts customHeaders app
+    `finally` closeStream

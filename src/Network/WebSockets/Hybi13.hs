@@ -1,6 +1,8 @@
 --------------------------------------------------------------------------------
 {-# LANGUAGE BangPatterns      #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes        #-}
+
 module Network.WebSockets.Hybi13
     ( headerVersions
     , finishRequest
@@ -17,7 +19,6 @@ module Network.WebSockets.Hybi13
 --------------------------------------------------------------------------------
 import qualified Blaze.ByteString.Builder              as B
 import           Control.Applicative                   (pure, (<$>))
-import           Control.Exception                     (throw)
 import           Control.Monad                         (liftM, forM)
 import qualified Data.Attoparsec.ByteString            as A
 import           Data.Binary.Get                       (getWord16be,
@@ -42,8 +43,6 @@ import           System.Random                         (RandomGen, newStdGen)
 import           Network.WebSockets.Http
 import           Network.WebSockets.Hybi13.Demultiplex
 import           Network.WebSockets.Hybi13.Mask
-import           Network.WebSockets.Stream             (Stream)
-import qualified Network.WebSockets.Stream             as Stream
 import           Network.WebSockets.Types
 
 
@@ -66,7 +65,7 @@ finishRequest reqHttp headers =
 --------------------------------------------------------------------------------
 finishResponse :: RequestHead
                -> ResponseHead
-               -> Response
+               -> Either HandshakeException Response
 finishResponse request response
     -- Response message should be one of
     --
@@ -74,12 +73,12 @@ finishResponse request response
     -- - Switching Protocols
     --
     -- But we don't check it for now
-    | responseCode response /= 101  = throw $ MalformedResponse response
+    | responseCode response /= 101  = Left $ MalformedResponse response
         "Wrong response status or message."
-    | responseHash /= challengeHash = throw $ MalformedResponse response
+    | responseHash /= challengeHash = Left $ MalformedResponse response
         "Challenge and response hashes do not match."
     | otherwise                     =
-        Response response ""
+        Right $ Response response ""
   where
     key           = getRequestHeader  request  "Sec-WebSocket-Key"
     responseHash  = getResponseHeader response "Sec-WebSocket-Accept"
@@ -106,14 +105,14 @@ encodeMessage conType gen msg = (gen', builder)
 --------------------------------------------------------------------------------
 encodeMessages
     :: ConnectionType
-    -> Stream
+    -> (B.Builder -> IO ())
     -> IO ([Message] -> IO ())
-encodeMessages conType stream = do
+encodeMessages conType streamWrite = do
     genRef <- newIORef =<< newStdGen
     return $ \msgs -> do
         builders <- forM msgs $ \msg ->
           atomicModifyIORef genRef $ \s -> encodeMessage conType s msg
-        Stream.write stream (B.toLazyByteString $ mconcat builders)
+        streamWrite (mconcat builders)
 
 --------------------------------------------------------------------------------
 encodeFrame :: Mask -> Frame -> B.Builder
@@ -148,14 +147,14 @@ encodeFrame mask f = B.fromWord8 byte0 `mappend`
 
 --------------------------------------------------------------------------------
 decodeMessages
-    :: Stream
+    :: (forall a. A.Parser a -> IO (Maybe a))
     -> IO (IO (Maybe Message))
-decodeMessages stream = do
+decodeMessages streamParse = do
     dmRef <- newIORef emptyDemultiplexState
     return $ go dmRef
   where
     go dmRef = do
-        mbFrame <- Stream.parse stream parseFrame
+        mbFrame <- streamParse parseFrame
         case mbFrame of
             Nothing    -> return Nothing
             Just frame -> do

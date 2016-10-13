@@ -1,6 +1,7 @@
 --------------------------------------------------------------------------------
 -- | Wrapper for supporting multiple protocol versions
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE RankNTypes #-}
+
 module Network.WebSockets.Protocol
     ( Protocol (..)
     , defaultProtocol
@@ -19,13 +20,15 @@ module Network.WebSockets.Protocol
 import           Data.ByteString           (ByteString)
 import qualified Data.ByteString           as B
 
+import Blaze.ByteString.Builder (Builder)
 
 --------------------------------------------------------------------------------
 import           Network.WebSockets.Http
 import qualified Network.WebSockets.Hybi13 as Hybi13
-import           Network.WebSockets.Stream (Stream)
 import           Network.WebSockets.Types
 
+import Data.Attoparsec
+import Network.WebSockets.Hybi13.Demultiplex (Frame)
 
 --------------------------------------------------------------------------------
 data Protocol
@@ -61,20 +64,20 @@ finishRequest Hybi13 = Hybi13.finishRequest
 
 
 --------------------------------------------------------------------------------
-finishResponse :: Protocol -> RequestHead -> ResponseHead -> Response
+finishResponse :: Protocol -> RequestHead -> ResponseHead -> Either HandshakeException Response
 finishResponse Hybi13 = Hybi13.finishResponse
 
 
 --------------------------------------------------------------------------------
 encodeMessages
-    :: Protocol -> ConnectionType -> Stream
+    :: Protocol -> ConnectionType -> (Builder -> IO ())
     -> IO ([Message] -> IO ())
 encodeMessages Hybi13 = Hybi13.encodeMessages
 
 
 --------------------------------------------------------------------------------
 decodeMessages
-    :: Protocol -> Stream
+    :: Protocol -> (forall a. Parser a -> IO (Maybe a))
     -> IO (IO (Maybe Message))
 decodeMessages Hybi13 = Hybi13.decodeMessages
 

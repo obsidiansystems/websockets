@@ -6,7 +6,7 @@ module Network.WebSockets.Handshake.Tests
 
 
 --------------------------------------------------------------------------------
-import           Control.Concurrent             (forkIO)
+import           Control.Concurrent             (forkIO, threadDelay)
 import           Control.Exception              (handle)
 import           Data.ByteString.Char8          ()
 import           Data.IORef                     (newIORef, readIORef,
@@ -21,8 +21,7 @@ import           Test.HUnit                     (Assertion, assert, (@?=))
 import           Network.WebSockets
 import           Network.WebSockets.Connection
 import           Network.WebSockets.Http
-import qualified Network.WebSockets.Stream      as Stream
-
+import Network.WebSockets.Tests.Util
 
 --------------------------------------------------------------------------------
 tests :: Test
@@ -39,12 +38,20 @@ tests = testGroup "Network.WebSockets.Handshake.Test"
 --------------------------------------------------------------------------------
 testHandshake :: RequestHead -> (PendingConnection -> IO a) -> IO ResponseHead
 testHandshake rq app = do
-    echo <- Stream.makeEchoStream
+  withEchoStream $ \parseStream writeStream closeStream -> do
     _    <- forkIO $ do
-        _ <- app (PendingConnection defaultConnectionOptions rq nullify echo)
+        _ <- app $ PendingConnection
+                     { pendingOptions  = defaultConnectionOptions
+                     , pendingRequest  = rq
+                     , pendingOnAccept = nullify
+                     , pendingStreamParse = parseStream
+                     , pendingStreamWrite = writeStream
+                     , pendingStreamClose = closeStream
+                     }
+
         return ()
-    mbRh <- Stream.parse echo decodeResponseHead
-    Stream.close echo
+    mbRh <- parseStream decodeResponseHead
+    closeStream
     case mbRh of
         Nothing -> fail "testHandshake: No response"
         Just rh -> return rh
@@ -77,7 +84,7 @@ testHandshakeHybi13 = do
     onAcceptFired                     <- newIORef False
     ResponseHead code message headers <- testHandshake rq13 $ \pc ->
         acceptRequest pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
-
+    threadDelay 10000
     readIORef onAcceptFired >>= assert
     code @?= 101
     message @?= "WebSocket Protocol Handshake"
@@ -93,7 +100,7 @@ testHandshakeHybi13WithProto = do
         getRequestSubprotocols (pendingRequest pc) @?= ["chat", "superchat"]
         acceptRequestWith pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
                           (AcceptRequest (Just "superchat") [])
-
+    threadDelay 100000 -- Could use MVar, but if it takes longer than this, probably a performance bug anyway.
     readIORef onAcceptFired >>= assert
     code @?= 101
     message @?= "WebSocket Protocol Handshake"
@@ -109,7 +116,7 @@ testHandshakeHybi13WithHeaders = do
         getRequestSubprotocols (pendingRequest pc) @?= ["chat", "superchat"]
         acceptRequestWith pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
                           (AcceptRequest Nothing [("Set-Cookie","sid=foo")])
-
+    threadDelay 100000
     readIORef onAcceptFired >>= assert
     code @?= 101
     message @?= "WebSocket Protocol Handshake"
@@ -126,7 +133,7 @@ testHandshakeHybi13WithProtoAndHeaders = do
         getRequestSubprotocols (pendingRequest pc) @?= ["chat", "superchat"]
         acceptRequestWith pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
                           (AcceptRequest (Just "superchat") [("Set-Cookie","sid=foo")])
-
+    threadDelay 100000
     readIORef onAcceptFired >>= assert
     code @?= 101
     message @?= "WebSocket Protocol Handshake"
