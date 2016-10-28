@@ -287,4 +287,4 @@ forkPingThread conn n
 
     ignore e = case fromException e of
         Just async -> throwIO (async :: AsyncException)
-        Nothing    -> return ()
+        Nothing    -> print e
