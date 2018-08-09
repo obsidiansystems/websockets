@@ -48,7 +48,9 @@ tests = testGroup "Network.WebSockets.Test"
 --------------------------------------------------------------------------------
 testSimpleEncodeDecode :: Protocol -> Property
 testSimpleEncodeDecode protocol = QC.monadicIO $
-    QC.forAllM QC.arbitrary $ \msgs -> QC.run $ do
+    QC.forAllM QC.arbitrary $ \msgs -> do
+      QC.run $ do
+        print msgs
         echo  <- Stream.makeEchoStream
         parse <- decodeMessages protocol mempty mempty echo
         write <- encodeMessages protocol ClientConnection echo

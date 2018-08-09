@@ -1,6 +1,8 @@
 --------------------------------------------------------------------------------
 -- | Lightweight abstraction over an input/output stream.
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecursiveDo #-}
 module Network.WebSockets.Stream
     ( Stream
     , makeStream
@@ -12,44 +14,35 @@ module Network.WebSockets.Stream
     , close
     ) where
 
-import           Control.Concurrent.MVar        (MVar, newEmptyMVar, newMVar,
-                                                 putMVar, takeMVar, withMVar)
-import           Control.Exception              (onException, throwIO)
-import           Control.Monad                  (forM_)
-import qualified Data.Attoparsec.ByteString     as Atto
-import qualified Data.Binary.Get                as BIN
-import qualified Data.ByteString                as B
-import qualified Data.ByteString.Lazy           as BL
-import           Data.IORef                     (IORef, atomicModifyIORef',
-                                                 newIORef, readIORef,
-                                                 writeIORef)
-import qualified Network.Socket                 as S
-import qualified Network.Socket.ByteString      as SB (recv)
-
-#if !defined(mingw32_HOST_OS)
-import qualified Network.Socket.ByteString.Lazy as SBL (sendAll)
-#else
-import qualified Network.Socket.ByteString      as SB (sendAll)
-#endif
-
-import           Network.WebSockets.Types
-
-
---------------------------------------------------------------------------------
--- | State of the stream
-data StreamState
-    = Closed !B.ByteString  -- Remainder
-    | Open   !B.ByteString  -- Buffer
+import Control.Concurrent
+import Control.Concurrent.MVar (newEmptyMVar, newMVar, putMVar, takeMVar, withMVar)
+import Control.Exception
+import Control.Monad
+import qualified Data.Attoparsec.ByteString as Atto
+import qualified Data.Binary.Get as BIN
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import Control.Monad.IO.Class
+import Control.Monad.Trans.State.Strict
+import qualified Pipes as P
+import Pipes ((>->))
+import qualified Pipes.Binary as P
+import qualified Pipes.ByteString as P
+import qualified Pipes.Parse as P
+import qualified Pipes.Attoparsec as P
+import qualified Pipes.Network.TCP as P
+import qualified Network.Socket as S
+import Data.IORef
+import Network.WebSockets.Types
 
 
 --------------------------------------------------------------------------------
 -- | Lightweight abstraction over an input/output stream.
 data Stream = Stream
-    { streamIn    :: IO (Maybe B.ByteString)
-    , streamOut   :: (Maybe BL.ByteString -> IO ())
-    , streamState :: !(IORef StreamState)
+    { streamParse :: forall a. P.Parser B.ByteString IO a -> IO a
+    , streamWrite :: BL.ByteString -> IO ()
+    , streamClose :: IO ()
     }
-
 
 --------------------------------------------------------------------------------
 -- | Create a stream from a "receive" and "send" action. The following
@@ -69,55 +62,52 @@ makeStream
     -> (Maybe BL.ByteString -> IO ())  -- ^ Writing
     -> IO Stream                       -- ^ Resulting stream
 makeStream receive send = do
-    ref         <- newIORef (Open B.empty)
-    receiveLock <- newMVar ()
-    sendLock    <- newMVar ()
-    return $ Stream (receive' ref receiveLock) (send' ref sendLock) ref
-  where
-    closeRef :: IORef StreamState -> IO ()
-    closeRef ref = atomicModifyIORef' ref $ \state -> case state of
-        Open   buf -> (Closed buf, ())
-        Closed buf -> (Closed buf, ())
-
-    -- Throw a 'ConnectionClosed' is the connection is not 'Open'.
-    assertOpen :: IORef StreamState -> IO ()
-    assertOpen ref = do
-        state <- readIORef ref
-        case state of
-            Closed _ -> throwIO ConnectionClosed
-            Open   _ -> return ()
-
-    receive' :: IORef StreamState -> MVar () -> IO (Maybe B.ByteString)
-    receive' ref lock = withMVar lock $ \() -> do
-        assertOpen ref
-        mbBs <- onException receive (closeRef ref)
-        case mbBs of
-            Nothing -> closeRef ref >> return Nothing
-            Just bs -> return (Just bs)
-
-    send' :: IORef StreamState -> MVar () -> (Maybe BL.ByteString -> IO ())
-    send' ref lock mbBs = withMVar lock $ \() -> do
-        case mbBs of
-            Nothing -> closeRef ref
-            Just _  -> assertOpen ref
-        onException (send mbBs) (closeRef ref)
-
+  closeRef <- newIORef (return ())
+  let receiveP = do
+        bytes <- liftIO $ try receive
+        case bytes of
+          Right Nothing -> return ()
+          Right (Just bs) -> P.yield bs >> receiveP
+          Left (SomeException _) -> liftIO $ throwIO ConnectionClosed
+  r <- newMVar receiveP
+  w <- newMVar send
+  let parser p = do
+        modifyMVar r $ \rp -> do
+            (out, rp') <- runStateT p rp
+            return $ (rp', out)
+      closer = do 
+        modifyMVar_ w $ \_ -> do
+          modifyMVar_ r $ \_ -> do
+            return $ liftIO $ throwIO ConnectionClosed
+          return (\_ -> throwIO ConnectionClosed)
+        send Nothing
+  writeIORef closeRef closer
+  return $ Stream
+    { streamParse = parser
+    , streamWrite = \s -> do
+      withMVar w $ \writer -> do
+        onException (writer $ Just s) closer
+    , streamClose = closer
+    }
 
 --------------------------------------------------------------------------------
 makeSocketStream :: S.Socket -> IO Stream
-makeSocketStream socket = makeStream receive send
-  where
-    receive = do
-        bs <- SB.recv socket 8192
-        return $ if B.null bs then Nothing else Just bs
-
-    send Nothing   = return ()
-    send (Just bs) = do
-#if !defined(mingw32_HOST_OS)
-        SBL.sendAll socket bs
-#else
-        forM_ (BL.toChunks bs) (SB.sendAll socket)
-#endif
+makeSocketStream socket = do
+  let producer = P.fromSocket socket 4096
+  prodRef <- newMVar producer
+  let consumer = P.toSocket socket
+      parseStream p = modifyMVar prodRef $ \pr -> do
+        (res, pr') <- P.runStateT p pr
+        return (pr', res)
+      writeStream b = P.runEffect (P.fromLazy b >-> consumer)
+      closeStream = do
+        modifyMVar_ prodRef (\_ -> return (return ()))
+        S.close socket
+  return $ Stream
+    { streamParse = parseStream
+    , streamWrite = writeStream
+    , streamClose = closeStream
+    }
 
 
 --------------------------------------------------------------------------------
@@ -128,77 +118,27 @@ makeEchoStream = do
         Nothing -> putMVar mvar Nothing
         Just bs -> forM_ (BL.toChunks bs) $ \c -> putMVar mvar (Just c)
 
-
 --------------------------------------------------------------------------------
 parseBin :: Stream -> BIN.Get a -> IO (Maybe a)
 parseBin stream parser = do
-    state <- readIORef (streamState stream)
-    case state of
-        Closed remainder
-            | B.null remainder -> return Nothing
-            | otherwise        -> go (BIN.runGetIncremental parser `BIN.pushChunk` remainder) True
-        Open buffer
-            | B.null buffer -> do
-                mbBs <- streamIn stream
-                case mbBs of
-                    Nothing -> do
-                        writeIORef (streamState stream) (Closed B.empty)
-                        return Nothing
-                    Just bs -> go (BIN.runGetIncremental parser `BIN.pushChunk` bs) False
-            | otherwise     -> go (BIN.runGetIncremental parser `BIN.pushChunk` buffer) False
-  where
-    -- Buffer is empty when entering this function.
-    go (BIN.Done remainder _ x) closed = do
-        writeIORef (streamState stream) $
-            if closed then Closed remainder else Open remainder
-        return (Just x)
-    go (BIN.Partial f) closed
-        | closed    = go (f Nothing) True
-        | otherwise = do
-            mbBs <- streamIn stream
-            case mbBs of
-                Nothing -> go (f Nothing) True
-                Just bs -> go (f (Just bs)) False
-    go (BIN.Fail _ _ err) _ = throwIO (ParseException err)
-
+  a <- streamParse stream $ P.decodeGet parser
+  case a of
+    (Left e) -> throwIO e
+    (Right v) -> return $ Just v
 
 parse :: Stream -> Atto.Parser a -> IO (Maybe a)
 parse stream parser = do
-    state <- readIORef (streamState stream)
-    case state of
-        Closed remainder
-            | B.null remainder -> return Nothing
-            | otherwise        -> go (Atto.parse parser remainder) True
-        Open buffer
-            | B.null buffer -> do
-                mbBs <- streamIn stream
-                case mbBs of
-                    Nothing -> do
-                        writeIORef (streamState stream) (Closed B.empty)
-                        return Nothing
-                    Just bs -> go (Atto.parse parser bs) False
-            | otherwise     -> go (Atto.parse parser buffer) False
-  where
-    -- Buffer is empty when entering this function.
-    go (Atto.Done remainder x) closed = do
-        writeIORef (streamState stream) $
-            if closed then Closed remainder else Open remainder
-        return (Just x)
-    go (Atto.Partial f) closed
-        | closed    = go (f B.empty) True
-        | otherwise = do
-            mbBs <- streamIn stream
-            case mbBs of
-                Nothing -> go (f B.empty) True
-                Just bs -> go (f bs) False
-    go (Atto.Fail _ _ err) _ = throwIO (ParseException err)
+  a <- streamParse stream (P.parse parser)
+  case a of
+    Just (Left e) -> throwIO e
+    Just (Right v) -> return $ Just v
+    Nothing -> return Nothing
 
 
 --------------------------------------------------------------------------------
 write :: Stream -> BL.ByteString -> IO ()
-write stream = streamOut stream . Just
-
+write stream = streamWrite stream
 
 --------------------------------------------------------------------------------
 close :: Stream -> IO ()
-close stream = streamOut stream Nothing
+close stream = streamClose stream

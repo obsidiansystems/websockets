@@ -12,7 +12,8 @@ import           Test.Framework                              (defaultMain)
 
 --------------------------------------------------------------------------------
 main :: IO ()
-main = defaultMain
+main = do
+  defaultMain
     [ Network.WebSockets.Extensions.Tests.tests
     , Network.WebSockets.Extensions.PermessageDeflate.Tests.tests
     , Network.WebSockets.Handshake.Tests.tests
