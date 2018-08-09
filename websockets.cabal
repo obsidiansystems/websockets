@@ -93,23 +93,13 @@ Library
     streaming-commons >= 0.1    && < 0.3,
     text              >= 0.10   && < 1.3,
     entropy           >= 0.2.1  && < 0.5,
-    pipes             >= 4.1,
-    pipes-attoparsec  >= 0.5,
-    pipes-bytestring  >= 2.1,
-    pipes-network     >= 0.6,
-    pipes-parse       >= 3.0,
-    pipes-binary      >= 0.4,
-    transformers,
-    stm-chans,
-    stm,
-    unix,
-    HUnit                      >= 1.2 && < 1.7,
-    QuickCheck                 >= 2.7 && < 2.12,
-    test-framework             >= 0.4 && < 0.9,
-    test-framework-hunit       >= 0.2 && < 0.4,
-    test-framework-quickcheck2 >= 0.2 && < 0.4
-
-
+    pipes             >= 4.1    && < 4.4,
+    pipes-attoparsec  >= 0.5    && < 0.5.2,
+    pipes-binary      >= 0.4.1  && < 0.5,
+    pipes-bytestring  >= 2.1    && < 2.2,
+    pipes-network     >= 0.6    && < 0.7,
+    pipes-parse       >= 3.0    && < 3.1,
+    mtl               >= 2.2    && < 2.3
 
 Test-suite websockets-tests
   Type:           exitcode-stdio-1.0
@@ -153,11 +143,8 @@ Test-suite websockets-tests
     test-framework-hunit       >= 0.2 && < 0.4,
     test-framework-quickcheck2 >= 0.2 && < 0.4,
     -- Copied from regular dependencies...
-    unix,
-    stm-chans,
-    stm,
     attoparsec        >= 0.10   && < 0.14,
-    base              >= 4      && < 5,
+    base              >= 4.6    && < 5,
     base64-bytestring >= 0.1    && < 1.1,
     binary            >= 0.8.1  && < 0.10,
     bytestring        >= 0.9    && < 0.11,
@@ -170,13 +157,14 @@ Test-suite websockets-tests
     streaming-commons >= 0.1    && < 0.3,
     text              >= 0.10   && < 1.3,
     entropy           >= 0.2.1  && < 0.5,
-    pipes             >= 4.1,
-    pipes-attoparsec  >= 0.5,
-    pipes-bytestring  >= 2.1,
-    pipes-network     >= 0.6,
-    pipes-parse       >= 3.0,
-    pipes-binary      >= 0.4,
-    transformers
+    pipes             >= 4.1    && < 4.4,
+    pipes-attoparsec  >= 0.5    && < 0.5.2,
+    pipes-binary      >= 0.4.1  && < 0.5,
+    pipes-bytestring  >= 2.1    && < 2.2,
+    pipes-network     >= 0.6    && < 0.7,
+    pipes-parse       >= 3.0    && < 3.1,
+    mtl               >= 2.2    && < 2.3
+
 
 
 Executable websockets-example
@@ -191,7 +179,7 @@ Executable websockets-example
     websockets,
     -- Copied from regular dependencies...
     attoparsec        >= 0.10   && < 0.14,
-    base              >= 4      && < 5,
+    base              >= 4.6    && < 5,
     base64-bytestring >= 0.1    && < 1.1,
     binary            >= 0.8.1  && < 0.10,
     bytestring        >= 0.9    && < 0.11,
@@ -201,8 +189,16 @@ Executable websockets-example
     network           >= 2.3    && < 2.8,
     random            >= 1.0    && < 1.2,
     SHA               >= 1.5    && < 1.7,
+    streaming-commons >= 0.1    && < 0.3,
     text              >= 0.10   && < 1.3,
-    entropy           >= 0.2.1  && < 0.5
+    entropy           >= 0.2.1  && < 0.5,
+    pipes             >= 4.1    && < 4.4,
+    pipes-attoparsec  >= 0.5    && < 0.5.2,
+    pipes-binary      >= 0.4.1  && < 0.5,
+    pipes-bytestring  >= 2.1    && < 2.2,
+    pipes-network     >= 0.6    && < 0.7,
+    pipes-parse       >= 3.0    && < 3.1,
+    mtl               >= 2.2    && < 2.3
 
 Executable websockets-autobahn
   If !flag(Example)
@@ -219,7 +215,7 @@ Executable websockets-autobahn
     websockets,
     -- Copied from regular dependencies...
     attoparsec        >= 0.10   && < 0.14,
-    base              >= 4      && < 5,
+    base              >= 4.6    && < 5,
     base64-bytestring >= 0.1    && < 1.1,
     binary            >= 0.8.1  && < 0.10,
     bytestring        >= 0.9    && < 0.11,
@@ -229,8 +225,16 @@ Executable websockets-autobahn
     network           >= 2.3    && < 2.8,
     random            >= 1.0    && < 1.2,
     SHA               >= 1.5    && < 1.7,
+    streaming-commons >= 0.1    && < 0.3,
     text              >= 0.10   && < 1.3,
-    entropy           >= 0.2.1  && < 0.5
+    entropy           >= 0.2.1  && < 0.5,
+    pipes             >= 4.1    && < 4.4,
+    pipes-attoparsec  >= 0.5    && < 0.5.2,
+    pipes-binary      >= 0.4.1  && < 0.5,
+    pipes-bytestring  >= 2.1    && < 2.2,
+    pipes-network     >= 0.6    && < 0.7,
+    pipes-parse       >= 3.0    && < 3.1,
+    mtl               >= 2.2    && < 2.3
 
 Benchmark bench-mask
     Type:           exitcode-stdio-1.0
@@ -245,7 +249,7 @@ Benchmark bench-mask
         criterion,
         -- Copied from regular dependencies...
         attoparsec        >= 0.10   && < 0.14,
-        base              >= 4      && < 5,
+        base              >= 4.6    && < 5,
         base64-bytestring >= 0.1    && < 1.1,
         binary            >= 0.8.1  && < 0.10,
         bytestring        >= 0.9    && < 0.11,
@@ -255,5 +259,13 @@ Benchmark bench-mask
         network           >= 2.3    && < 2.8,
         random            >= 1.0    && < 1.2,
         SHA               >= 1.5    && < 1.7,
+        streaming-commons >= 0.1    && < 0.3,
         text              >= 0.10   && < 1.3,
-        entropy           >= 0.2.1  && < 0.5
+        entropy           >= 0.2.1  && < 0.5,
+        pipes             >= 4.1    && < 4.4,
+        pipes-attoparsec  >= 0.5    && < 0.5.2,
+        pipes-binary      >= 0.4.1  && < 0.5,
+        pipes-bytestring  >= 2.1    && < 2.2,
+        pipes-network     >= 0.6    && < 0.7,
+        pipes-parse       >= 3.0    && < 3.1,
+        mtl               >= 2.2    && < 2.3

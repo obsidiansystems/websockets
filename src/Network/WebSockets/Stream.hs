@@ -14,26 +14,28 @@ module Network.WebSockets.Stream
     , close
     ) where
 
-import Control.Concurrent
-import Control.Concurrent.MVar (newEmptyMVar, newMVar, putMVar, takeMVar, withMVar)
-import Control.Exception
-import Control.Monad
-import qualified Data.Attoparsec.ByteString as Atto
-import qualified Data.Binary.Get as BIN
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
-import Control.Monad.IO.Class
-import Control.Monad.Trans.State.Strict
-import qualified Pipes as P
-import Pipes ((>->))
-import qualified Pipes.Binary as P
-import qualified Pipes.ByteString as P
-import qualified Pipes.Parse as P
-import qualified Pipes.Attoparsec as P
-import qualified Pipes.Network.TCP as P
-import qualified Network.Socket as S
-import Data.IORef
-import Network.WebSockets.Types
+import           Control.Concurrent             (modifyMVar, modifyMVar_)
+import           Control.Concurrent.MVar        (newEmptyMVar, newMVar,
+                                                 putMVar, takeMVar, withMVar)
+import           Control.Exception              (throwIO, try, onException,
+                                                 SomeException(..))
+import           Control.Monad                  (forM_)
+import           Control.Monad.IO.Class         (liftIO)
+import           Control.Monad.State.Strict     (runStateT)
+import qualified Data.Attoparsec.ByteString     as Atto
+import qualified Data.Binary.Get                as BIN
+import qualified Data.ByteString                as B
+import qualified Data.ByteString.Lazy           as BL
+import qualified Pipes                          as P
+import           Pipes                          ((>->))
+import qualified Pipes.Binary                   as P
+import qualified Pipes.ByteString               as P
+import qualified Pipes.Parse                    as P
+import qualified Pipes.Attoparsec               as P
+import qualified Pipes.Network.TCP              as P
+import qualified Network.Socket                 as S
+import           Data.IORef                     (newIORef, writeIORef)
+import           Network.WebSockets.Types       (ConnectionException(..))
 
 
 --------------------------------------------------------------------------------
