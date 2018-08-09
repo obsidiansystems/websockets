@@ -2,7 +2,6 @@
 -- | Lightweight abstraction over an input/output stream.
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecursiveDo #-}
 module Network.WebSockets.Stream
     ( Stream
     , makeStream
